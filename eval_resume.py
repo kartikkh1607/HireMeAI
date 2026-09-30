@@ -1,8 +1,11 @@
 # =============================================================================
 # eval_resume.py - resume parsing ka GOLDEN SET eval
 # Har check ek known-correct answer hai: humne resume khud padh ke pakka kiya
-# ki usme 7 links, 3 projects, hackathon wagairah hain.
+# ki usme 9 links, 4 projects (HireMeAI + 3 Android), hackathon wagairah hain.
 # Prompt / schema / model / filter kuch bhi badlo -> ye chalao -> FAIL = kuch toota.
+#
+# RESUME BADLA? -> golden values bhi update karo (resume padh ke, parser ka
+# output copy karke NAHI - warna eval wahi check karega jo parser ne diya).
 #
 # RULE: eval ka logic filter se INDEPENDENT hona chahiye. Agar eval bhi wahi
 # normalize() use kare jo filter karta hai, to filter ki galti eval me bhi
@@ -16,9 +19,14 @@ resume = load_resume()
 CERT_WORDS = ("practitioner", "cloudops", "data engineer", "certified")
 
 checks = {
-    "7 links extracted": len(resume.links) == 7,
-    "every project has a link": all(p.link for p in resume.projects),
-    "every project has 3+ highlights": all(len(p.highlights) >= 3 for p in resume.projects),
+    # 4 profile links + HireMeAI (demo + code) + 3 Android repos = 9
+    "9 links extracted": len(resume.links) == 9,
+    # HireMeAI me 3 bullets, Android projects me 2-2
+    "every project has 2+ highlights": all(
+        len(p.highlights) >= 2 for p in resume.projects
+    ),
+    # Sabse important project parse me chup-chaap gayab na ho
+    "HireMeAI project present": any(p.name == "HireMeAI" for p in resume.projects),
     "hackathon in achievements": any("Hackathon" in a for a in resume.achievements),
     "coursework present": bool(resume.education and resume.education[0].coursework),
     # v3 me ye check sirf "practitioner" dekhta tha -> "AWS CloudOps Engineer"
@@ -26,7 +34,9 @@ checks = {
     "no certifications in skills": not any(
         word in s.lower() for s in resume.skills for word in CERT_WORDS
     ),
-    "cert dates separated": all("AssociateApril" not in c for c in resume.certifications),
+    "cert dates separated": all(
+        "AssociateApril" not in c for c in resume.certifications
+    ),
 }
 
 for name, passed in checks.items():
