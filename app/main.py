@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager  # lifespan function banane ke liye
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # file / JSON / tukdon me jawab
 from fastapi.staticfiles import StaticFiles  # React build ki JS/CSS files serve karne ke liye
 from pydantic import BaseModel, Field
@@ -205,9 +205,14 @@ def _too_many(message: str, retry_after: float) -> HTTPException:
     )
 
 
-# FastAPI DEPENDENCY - /chat ke function se PEHLE chalti hai.
-# HTTPException raise ki -> endpoint chalta hi nahi, seedha 429 JSON jaata hai:
+# /chat handler ki PEHLI line me call hota hai - yaani body VALIDATE hone ke BAAD.
+# HTTPException raise ki -> baaki handler chalta hi nahi, seedha 429 JSON jaata hai:
 #   {"detail": "Too many questions ..."}  + Retry-After header (seconds)
+#
+# Dependency (Depends) kyun NAHI? FastAPI dependencies body validation se
+# PEHLE chala deta hai -> galat request (422) bhi limit me gini jaati thi.
+# Koi 30 kachra requests bhej ke (jo Groq tak jaati hi nahi) sabka global
+# budget kha sakta tha. Ab sirf VALID requests gini jaati hain.
 #
 # ORDER:
 #   1. global CHECK (gino mat)  -> bhara hai to "busy" 429
@@ -297,9 +302,13 @@ def profile():
 
 
 # Asli chat endpoint. POST kyunki data (sawaal + history) body me bhej rahe hain.
-# dependencies=[...] -> rate limit check endpoint se PEHLE (limit par -> 429)
-@app.post("/chat", dependencies=[Depends(enforce_rate_limit)])
-def chat(request: ChatRequest):
+# http_request = raw Request (client IP ke liye), request = validated body.
+@app.post("/chat")
+def chat(request: ChatRequest, http_request: Request):
+    # Yahan tak aaye = body valid hai (warna FastAPI 422 de chuka hota).
+    # Ab rate limit gino (limit par -> 429, Groq call nahi hoti).
+    enforce_rate_limit(http_request)
+
     stream = stream_answer(app.state.system_prompt, request.history, request.question)
 
     # -------------------------------------------------------------------------

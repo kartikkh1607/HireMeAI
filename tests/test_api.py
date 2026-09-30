@@ -154,6 +154,19 @@ def test_rate_limit_per_minute(client):
     assert int(res.headers["Retry-After"]) >= 1
 
 
+def test_invalid_requests_do_not_consume_rate_limit(client):
+    # 422 wali requests Groq tak jaati hi nahi -> limit me nahi ginni chahiye.
+    # Pehle limiter dependency tha (validation se PEHLE chalta tha) -> 10 kachra
+    # requests ke baad valid sawaal pe bhi 429 aata tha.
+    for _ in range(20):
+        assert ask(client, question="").status_code == 422
+
+    assert ask(client).status_code == 200
+    # Per-IP aur global dono me sirf 1 (valid) request gini gayi
+    assert len(main.chat_limiter._hits["testclient"]) == 1
+    assert len(main.global_limiter._hits[main.GLOBAL_KEY]) == 1
+
+
 def test_spoofed_forwarded_ips_are_stopped_by_global_limit(proxied_client):
     # Attacker har request me NAYA nakli IP bhejta hai -> per-IP limit bekaar
     statuses = [ask_as(proxied_client, f"10.0.{i}.1").status_code for i in range(35)]

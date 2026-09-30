@@ -4,17 +4,16 @@
 
 Recruiters can ask things like *"What has he built?"*, *"Has he done any hackathons?"* or *"Does he know Kubernetes?"* and get short, honest answers with links — streamed in real time. If something is not in the resume, the bot says so instead of making it up.
 
-> Live demo: _coming soon_
+> **Live demo:** https://hiremeai-kartik.onrender.com
 
-<!-- Add a screenshot: save it as docs/screenshot.png and uncomment the line below -->
-<!-- ![HireMeAI screenshot](docs/screenshot.png) -->
+![HireMeAI screenshot](docs/screenshot.png)
 
 ---
 
 ## Features
 
 - **Resume → structured data** with strict JSON-schema output (Pydantic + Groq structured outputs)
-- **Parse once, cache forever** — the resume is parsed at startup and cached; the cache invalidates automatically when the file, prompt or model changes (parser code changes need a manual `PARSER_VERSION` bump in `app/resume.py`)
+- **Parse once, ship the result** — the resume is parsed locally and the validated result is committed as a cache (`data/resume_cache.json`), so production startup makes zero LLM calls. The cache key covers the file, prompt and model; parser code changes still need a manual `PARSER_VERSION` bump in `app/resume.py`
 - **Streaming chat** with multi-turn memory (sliding window of the last 10 messages)
 - **Grounded answers** — no invented skills, no exaggerated skill levels, honest "not in the resume" replies
 - **Privacy by design** — the phone number is parsed but never sent to the chat model
@@ -38,7 +37,7 @@ flowchart TD
 ```
 
 **Two flows:**
-1. **Startup (once):** read PDF → extract text + hidden hyperlinks → LLM parses into a strict `Resume` schema → post-process → cache to disk.
+1. **Startup (once):** if the committed cache matches the current resume, prompt and model, load it instantly; otherwise read PDF → extract text + hidden hyperlinks → LLM parses into a strict `Resume` schema → post-process → cache to disk.
 2. **Every question:** system prompt (resume JSON, phone removed) + last 10 messages + question → streamed answer.
 
 The expensive work (parsing) happens once; each question is a single cheap chat call.
@@ -65,7 +64,8 @@ Most of the design came from things that broke during testing:
 - **Code over prompts.** The model kept listing certifications as skills even when told not to (the resume itself lists them under skills). A deterministic post-processing filter fixed it — and the first version of that filter was itself brittle, which a stronger eval caught.
 - **Cache keys must include everything that changes output** — file bytes, prompt, model and a manual parser version.
 - **Hide data *and* tell the model.** Removing the phone number made the bot claim "the resume has no phone number" — technically a lie. The prompt now states it is intentionally withheld.
-- **Retry only transient errors.** 429 / 5xx / network / invalid JSON are retried with exponential backoff; auth errors and truncated output (`finish_reason == "length"`) are not.
+- **Retry only transient errors.** 429 / 5xx / network / invalid JSON are retried with exponential backoff; auth errors, bad requests and truncated output are not.
+- **Production startup must not depend on an LLM.** After a resume update, a redeploy on Render failed while the same code had just started fine. `gpt-oss` is a reasoning model, its thinking tokens count toward the output limit, and on a longer run the JSON got cut off. In strict mode Groq reports this as a `400 json_validate_failed`, not `finish_reason == "length"`, so the truncation check never fired. Fix: an explicit `max_completion_tokens` (8192) for structured calls in `app/llm.py`, and the parsed resume is committed so the server starts in milliseconds without calling Groq.
 - **Stateless server.** Chat history lives in the browser and is sent with each request, so the backend needs no database or sessions.
 
 ## Evaluation
@@ -81,7 +81,10 @@ The chat was red-teamed manually: follow-up questions, missing skills (Kubernete
 ## Tech stack
 
 **Backend:** Python 3.11, FastAPI, Pydantic v2, Groq (`openai/gpt-oss-120b`), tenacity, pypdf, python-docx, uv
+
 **Frontend:** React, TypeScript, Vite, Tailwind CSS, react-markdown
+
+**Testing & deploy:** pytest, Render
 
 ## Run locally
 
@@ -96,8 +99,13 @@ uv sync
 #    GROQ_API_KEY=your_key_here
 #    (On Windows, create it in your editor - PowerShell's echo writes UTF-16)
 
-# 2. Add a resume
-#    put your PDF at data/my_resume.pdf
+# 2. (Optional) Use your own resume
+#    replace data/my_resume.pdf, then run
+#    uv run python eval_resume.py
+#    to re-parse it and refresh data/resume_cache.json
+#    (and update the golden values in eval_resume.py for that resume)
+#    Note: the chat prompt (app/chat.py) and some UI copy are written for my
+#    resume (e.g. he/his, card subtitles) - edit them when reusing it.
 
 # 3. Run
 uv run uvicorn app.main:app --reload
@@ -116,7 +124,7 @@ npm run build      # outputs to ../static, served by FastAPI
 Useful scripts:
 
 ```bash
-uv run pytest                        # API tests - no Groq calls, runs in ~1s
+uv run pytest                        # tests - no Groq calls, runs in ~1s
 uv run python eval_resume.py         # parser golden-set eval (uses the cached parse)
 uv run python -m scripts.try_chat    # chat in the terminal (real Groq calls)
 ```
@@ -137,6 +145,7 @@ ENV=production uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-h
 |---|---|
 | Rate limit (per IP) | `POST /chat`: 10 requests/minute and 100/day per IP → `429` with a JSON `detail` and `Retry-After` header. Best-effort only (see below) |
 | Rate limit (global) | 30 requests/minute and 300/day across **all** clients, regardless of IP → `429` "The assistant is busy right now". This is the cap that actually protects the Groq quota. Requests blocked by the per-IP limit don't count against it |
+| Only valid requests count | Rate limits are checked after the request body is validated, so invalid requests (`422`) never use up the per-IP or global budget |
 | Request size | Question 1–1000 chars; history max 20 messages, each max 4000 chars (the UI sends only the last 10) |
 | Token cap | `max_completion_tokens=1500` per answer (includes the reasoning tokens of `gpt-oss`); truncated answers end with *(answer truncated)* |
 | Privacy | The phone number is parsed but never sent to the chat model or returned by `/profile` |
@@ -162,7 +171,7 @@ ENV=production uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-h
 
 ## Roadmap
 
-- [ ] Deploy with a public demo link
+- [x] Deploy with a public demo link
 - [ ] LLM-as-judge eval for chat answers (groundedness, no exaggeration)
 - [ ] Job-description matching: paste a JD, get a grounded fit summary
 
