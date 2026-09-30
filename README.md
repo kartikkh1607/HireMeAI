@@ -135,7 +135,8 @@ ENV=production uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-h
 
 | Protection | How |
 |---|---|
-| Rate limit | `POST /chat`: 10 requests/minute and 100/day per IP → `429` with a JSON `detail` and `Retry-After` header |
+| Rate limit (per IP) | `POST /chat`: 10 requests/minute and 100/day per IP → `429` with a JSON `detail` and `Retry-After` header. Best-effort only (see below) |
+| Rate limit (global) | 30 requests/minute and 300/day across **all** clients, regardless of IP → `429` "The assistant is busy right now". This is the cap that actually protects the Groq quota. Requests blocked by the per-IP limit don't count against it |
 | Request size | Question 1–1000 chars; history max 20 messages, each max 4000 chars (the UI sends only the last 10) |
 | Token cap | `max_completion_tokens=1500` per answer (includes the reasoning tokens of `gpt-oss`); truncated answers end with *(answer truncated)* |
 | Privacy | The phone number is parsed but never sent to the chat model or returned by `/profile` |
@@ -147,7 +148,8 @@ ENV=production uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-h
 
 **Known limitations**
 
-- The rate limiter is in-memory and per process: counts reset on restart and are not shared across multiple instances or workers (fine for a single instance; use Redis to scale out). Behind a proxy, uvicorn must run with `--proxy-headers --forwarded-allow-ips="*"`, otherwise every visitor shares the proxy's IP.
+- **Per-IP limits can be bypassed.** Behind a proxy, uvicorn must run with `--proxy-headers --forwarded-allow-ips="*"`, otherwise every visitor shares the proxy's IP. But with `"*"` uvicorn trusts the *left-most* `X-Forwarded-For` value, which the client controls, so a client can send a fake IP on every request and never hit the per-IP limit. The per-IP limit is therefore a fairness measure for normal users. The global limit is the real protection: spoofing can at most use up the global budget (making the bot "busy" for others until the window resets), never more Groq calls than that.
+- The rate limiters are in-memory and per process: counts reset on restart and are not shared across multiple instances or workers (fine for a single instance; use Redis to scale out).
 - The server is stateless, so it trusts the history the browser sends. A client can fabricate earlier "assistant" turns — but that only affects their own conversation, never other users. Low risk by design.
 
 ## API

@@ -93,22 +93,35 @@ app = FastAPI(
 
 
 # -----------------------------------------------------------------------------
-# RATE LIMITER - ek IP kitne sawaal pooch sakti hai (Groq quota bachane ke liye).
-# Koi nayi library nahi - bas har IP ke request times ki list (deque).
+# RATE LIMITER - kitne sawaal pooche ja sakte hain (Groq quota bachane ke liye).
+# Koi nayi library nahi - bas har key (IP, ya "global") ke request times ki
+# list (deque). DO limiters hain:
+#   1. chat_limiter   -> PER-IP: 10/minute, 100/day. Ek user ko fair limit.
+#   2. global_limiter -> SABKI requests milake: 30/minute, 300/day.
+#                        IP dekhta hi nahi. Groq quota ko ASLI suraksha yahi hai.
 #
 # SLIDING WINDOW: "pichhle 60 second me kitni requests?" - har baar ginte hain.
 # (Fixed window "12:00-12:01" me 12:00:59 + 12:01:00 pe double requests nikal
 #  jaati hain; sliding me nahi.)
 #
-# LIMITATIONS (jaan-boojh ke simple rakha):
+# PER-IP LIMIT SIRF "BEST-EFFORT" HAI - kyun?
+#   Proxy ke peeche (Render, Nginx) request.client.host = PROXY ka IP hota hai.
+#   Isliye deploy pe uvicorn ko --proxy-headers --forwarded-allow-ips="*" dete
+#   hain, taaki wo X-Forwarded-For header se user ka IP nikaale.
+#   PAR: "*" ke saath uvicorn header ki SABSE LEFT value leta hai - aur wo
+#   value CLIENT khud likh sakta hai! Koi har request me naya nakli
+#   "X-Forwarded-For: 1.2.3.<n>" bheje to har baar "naya user" ban jaata hai
+#   aur per-IP limit kabhi nahi lagti (test karke dekha: 12/12 requests 200).
+#   Normal users ke liye per-IP limit phir bhi kaam karti hai; attacker ke
+#   liye nahi. Isliye GLOBAL limiter backstop hai - IP jhoothi ho ya sachchi,
+#   poore server pe 30/minute se zyada Groq calls nahi jaayengi.
+#   (Side fayda: global limit ki wajah se nakli IPs ki list bhi memory me
+#    bahut badi nahi ho sakti.)
+#
+# BAAKI LIMITATIONS (jaan-boojh ke simple rakha):
 #   - Data sirf is PROCESS ki memory me hai. Server restart = counts reset.
 #     2+ workers/instances chalaoge to har ek ki alag ginti hogi. Ek instance
 #     ke liye theek hai; scale karna ho to Redis jaisa shared store chahiye.
-#   - Proxy ke peeche (Render, Nginx) request.client.host = PROXY ka IP hota
-#     hai, user ka nahi -> sab users ek hi limit share karenge! Isliye deploy
-#     pe uvicorn aise chalao:
-#       uvicorn app.main:app --proxy-headers --forwarded-allow-ips="*"
-#     Tab uvicorn X-Forwarded-For header se asli IP nikaalta hai.
 #
 # threading.Lock kyun? "def" endpoints alag-alag threads me chalte hain -
 # do requests ek saath deque badlein to count galat ho sakta hai.
@@ -126,31 +139,42 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._last_prune = clock()
 
-    def hit(self, key: str) -> tuple[str, float] | None:
-        """Allowed -> None (aur request gin li). Blocked -> (message, retry_after_seconds)."""
+    def check(self, key: str) -> tuple[str, float] | None:
+        """Sirf DEKHO, gino mat. Allowed -> None. Blocked -> (message, retry_after_seconds)."""
         now = self.clock()
         with self._lock:
-            self._prune(now)
-            hits = self._hits.setdefault(key, deque())
-            # 24 ghante se purane timestamps hatao (deque ke left = sabse purane)
-            while hits and hits[0] <= now - DAY:
-                hits.popleft()
+            return self._blocked(key, now)
 
-            if len(hits) >= self.per_day:
-                return (
-                    f"Daily limit reached ({self.per_day} questions per day). Please try again tomorrow.",
-                    hits[0] + DAY - now,
-                )
+    def hit(self, key: str) -> tuple[str, float] | None:
+        """check() + allowed ho to request GIN bhi lo."""
+        now = self.clock()
+        with self._lock:
+            blocked = self._blocked(key, now)
+            if blocked is None:
+                self._hits[key].append(now)  # sirf ALLOWED requests gini jaati hain
+            return blocked
 
-            recent = [t for t in hits if t > now - MINUTE]
-            if len(recent) >= self.per_minute:
-                return (
-                    f"Too many questions ({self.per_minute} per minute). Please wait a moment and try again.",
-                    recent[0] + MINUTE - now,
-                )
+    def _blocked(self, key: str, now: float) -> tuple[str, float] | None:
+        # Lock pakad ke hi call karna (check/hit karte hain)
+        self._prune(now)
+        hits = self._hits.setdefault(key, deque())
+        # 24 ghante se purane timestamps hatao (deque ke left = sabse purane)
+        while hits and hits[0] <= now - DAY:
+            hits.popleft()
 
-            hits.append(now)  # sirf ALLOWED requests gini jaati hain
-            return None
+        if len(hits) >= self.per_day:
+            return (
+                f"Daily limit reached ({self.per_day} questions per day). Please try again tomorrow.",
+                hits[0] + DAY - now,
+            )
+
+        recent = [t for t in hits if t > now - MINUTE]
+        if len(recent) >= self.per_minute:
+            return (
+                f"Too many questions ({self.per_minute} per minute). Please wait a moment and try again.",
+                recent[0] + MINUTE - now,
+            )
+        return None
 
     def _prune(self, now: float) -> None:
         # Ghante me ek baar: jo IPs 24h se nahi aayin unhe memory se hatao,
@@ -163,22 +187,46 @@ class RateLimiter:
             del self._hits[ip]
 
 
-chat_limiter = RateLimiter(per_minute=10, per_day=100)
+chat_limiter = RateLimiter(per_minute=10, per_day=100)  # per-IP (best-effort)
+global_limiter = RateLimiter(per_minute=30, per_day=300)  # sab milake (asli backstop)
+GLOBAL_KEY = "global"
+GLOBAL_BUSY_MESSAGE = "The assistant is busy right now, please try again later."
+
+# Dono limiters ko EK saath check+count karne ke liye. Iske bina do threads
+# global check pass kar ke dono count ho sakte the -> limit se 1-2 zyada.
+_limits_lock = threading.Lock()
+
+
+def _too_many(message: str, retry_after: float) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail=message,
+        headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+    )
 
 
 # FastAPI DEPENDENCY - /chat ke function se PEHLE chalti hai.
 # HTTPException raise ki -> endpoint chalta hi nahi, seedha 429 JSON jaata hai:
 #   {"detail": "Too many questions ..."}  + Retry-After header (seconds)
+#
+# ORDER:
+#   1. global CHECK (gino mat)  -> bhara hai to "busy" 429
+#   2. per-IP HIT (check+gino)  -> is IP ki limit par to 429
+#   3. global HIT (ab gino)     -> sirf tab jab per-IP bhi pass hua
+# Kyun? Agar global PEHLE gin lete, to ek blocked user baar-baar request bhej
+# ke sabka global budget kha jaata (uski requests Groq tak jaati bhi nahi).
 def enforce_rate_limit(request: Request) -> None:
     ip = request.client.host if request.client else "unknown"
-    blocked = chat_limiter.hit(ip)
-    if blocked:
-        message, retry_after = blocked
-        raise HTTPException(
-            status_code=429,
-            detail=message,
-            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
-        )
+    with _limits_lock:
+        blocked = global_limiter.check(GLOBAL_KEY)
+        if blocked:
+            raise _too_many(GLOBAL_BUSY_MESSAGE, blocked[1])
+
+        blocked = chat_limiter.hit(ip)
+        if blocked:
+            raise _too_many(*blocked)
+
+        global_limiter.hit(GLOBAL_KEY)
 
 
 # -----------------------------------------------------------------------------

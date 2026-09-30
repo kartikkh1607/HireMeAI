@@ -21,6 +21,7 @@ import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import app.main as main
 from app.schemas import Resume
@@ -54,11 +55,28 @@ def client(monkeypatch):
     # lifespan me load_resume() chalta hai -> PDF/LLM ki jagah nakli resume
     monkeypatch.setattr(main, "load_resume", lambda: FAKE_RESUME)
     monkeypatch.setattr(main, "stream_answer", fake_stream)
-    # Har test ko NAYA limiter - warna pichhle test ki requests gini jaatin
+    # Har test ko NAYE limiters - warna pichhle test ki requests gini jaatin
     monkeypatch.setattr(main, "chat_limiter", main.RateLimiter(per_minute=10, per_day=100))
+    monkeypatch.setattr(main, "global_limiter", main.RateLimiter(per_minute=30, per_day=300))
     # "with" -> lifespan (startup) chalta hai, jaise asli server me
     with TestClient(main.app) as c:
         yield c
+
+
+@pytest.fixture
+def proxied_client(client):
+    # Production jaisa setup: uvicorn --proxy-headers --forwarded-allow-ips="*"
+    # wahi ProxyHeadersMiddleware lagata hai. Isse wrap karne se TestClient me
+    # bhi request.client.host = X-Forwarded-For ki LEFT-most value banti hai -
+    # yaani client jo chahe IP "bana" sakta hai. (client fixture ke patches
+    # yahan bhi lage rehte hain.)
+    wrapped = ProxyHeadersMiddleware(main.app, trusted_hosts="*")
+    with TestClient(wrapped) as c:
+        yield c
+
+
+def ask_as(client, ip, question="What has he built?"):
+    return client.post("/chat", json={"question": question, "history": []}, headers={"X-Forwarded-For": ip})
 
 
 def ask(client, question="What has he built?", history=None):
@@ -134,6 +152,45 @@ def test_rate_limit_per_minute(client):
     assert res.status_code == 429
     assert "per minute" in res.json()["detail"]
     assert int(res.headers["Retry-After"]) >= 1
+
+
+def test_spoofed_forwarded_ips_are_stopped_by_global_limit(proxied_client):
+    # Attacker har request me NAYA nakli IP bhejta hai -> per-IP limit bekaar
+    statuses = [ask_as(proxied_client, f"10.0.{i}.1").status_code for i in range(35)]
+
+    # Saboot ki spoofing sach me kaam kar rahi hai: per-IP limiter ne 30
+    # alag "users" dekhe (warna ye test kuch prove hi nahi karta)
+    assert len(main.chat_limiter._hits) == 30
+
+    assert statuses[:30] == [200] * 30  # global 30/minute tak
+    assert statuses[30:] == [429] * 5  # uske baad sab band - IP kuch bhi ho
+
+    res = ask_as(proxied_client, "10.9.9.9")
+    assert res.json()["detail"] == main.GLOBAL_BUSY_MESSAGE
+    assert int(res.headers["Retry-After"]) >= 1
+
+
+def test_blocked_ip_does_not_consume_global_budget(proxied_client):
+    # Ek IP apni limit (10) ke baad bhi 5 aur bhejta hai -> wo 5 blocked
+    same_ip = [ask_as(proxied_client, "1.1.1.1").status_code for _ in range(15)]
+    assert same_ip == [200] * 10 + [429] * 5
+
+    # Global me sirf 10 gine gaye (blocked 5 nahi) -> baaki 20 users ke liye jagah
+    others = [ask_as(proxied_client, f"2.2.2.{i}").status_code for i in range(20)]
+    assert others == [200] * 20
+
+    # Ab global poora bhar gaya (10 + 20 = 30)
+    res = ask_as(proxied_client, "3.3.3.3")
+    assert res.status_code == 429
+    assert res.json()["detail"] == main.GLOBAL_BUSY_MESSAGE
+
+
+def test_check_does_not_count():
+    limiter = main.RateLimiter(per_minute=1, per_day=10)
+    assert limiter.check("k") is None
+    assert limiter.check("k") is None  # check() ne kuch gina nahi
+    assert limiter.hit("k") is None
+    assert limiter.check("k") is not None  # ab 1/minute bhar gaya
 
 
 class FakeClock:
