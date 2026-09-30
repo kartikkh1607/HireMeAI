@@ -1,0 +1,198 @@
+@import "tailwindcss";
+
+/* =============================================================================
+   THEME - saare colors CSS variables me. Dark default hai; OS light mode pe ho
+   to neeche wala @media block sirf variables badal deta hai. Components me
+   hardcoded color nahi - sirf bg-bg, text-fg, border-border jaise tokens.
+   ============================================================================= */
+:root {
+  color-scheme: dark;
+  --bg: #0e0e10;
+  --surface: #17171a;
+  --surface-2: #222226;
+  --border: #2c2c31;
+  --fg: #ececf1;
+  --muted: #a1a1aa;
+  --subtle: #85858f;
+  --accent: #8f9bff;
+  --accent-soft: rgb(143 155 255 / 0.14);
+  --danger: #f87171;
+  --danger-soft: rgb(248 113 113 / 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #f7f7f8;
+    --surface-2: #efeff1;
+    --border: #e4e4e7;
+    --fg: #18181b;
+    --muted: #5c5c66;
+    --subtle: #71717a;
+    --accent: #5359d6;
+    --accent-soft: rgb(83 89 214 / 0.1);
+    --danger: #dc2626;
+    --danger-soft: rgb(220 38 38 / 0.07);
+  }
+}
+
+/* "inline" -> Tailwind utilities seedha var() use karein, taaki theme switch
+   pe (media query) colors apne-aap badlein */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Keyboard users ke liye saaf focus ring (mouse click pe nahi dikhta) */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+}
+
+/* =============================================================================
+   MARKDOWN TYPOGRAPHY - assistant ke jawab ke liye (tailwind typography plugin
+   allowed deps me nahi, isliye chhota apna version)
+   ============================================================================= */
+.md {
+  font-size: 0.975rem;
+  line-height: 1.75;
+  overflow-wrap: anywhere; /* lambe URLs mobile pe horizontal scroll na banayein */
+}
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.9em; }
+.md strong { font-weight: 600; color: var(--fg); }
+.md h1, .md h2, .md h3, .md h4 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.4em 0 0.5em;
+  letter-spacing: -0.01em;
+}
+.md h1 { font-size: 1.3em; }
+.md h2 { font-size: 1.15em; }
+.md h3, .md h4 { font-size: 1.02em; }
+.md ul, .md ol { margin: 0 0 0.9em; padding-left: 1.35em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.3em 0; padding-left: 0.2em; }
+.md li::marker { color: var(--subtle); }
+.md li > ul, .md li > ol { margin: 0.25em 0 0.25em; }
+.md li > p { margin: 0 0 0.4em; }
+.md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s;
+}
+.md a:hover { text-decoration-color: var(--accent); }
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.1em 0.35em;
+}
+.md pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 0.9em;
+  overflow-x: auto; /* sirf code block andar scroll ho, page nahi */
+  font-size: 0.875em;
+  line-height: 1.6;
+}
+.md pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.md blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted);
+  margin: 0 0 0.9em;
+}
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.md table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 0.9em;
+  font-size: 0.925em;
+}
+.md th, .md td { border: 1px solid var(--border); padding: 0.4em 0.75em; text-align: left; }
+.md th { background: var(--surface); font-weight: 600; }
+
+/* =============================================================================
+   STREAMING CURSOR - jawab aate waqt aakhri text ke baad blinking bar.
+   Markdown ke andar span inject karna mushkil hai, isliye CSS ::after se
+   aakhri block (paragraph / list ka aakhri item) ke end me laga dete hain.
+   ============================================================================= */
+.md.is-streaming > :is(p, h1, h2, h3, h4, blockquote):last-child::after,
+.md.is-streaming > :is(ul, ol):last-child > li:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 0.15em;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--fg);
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  to { visibility: hidden; }
+}
+
+/* "Soch raha hoon" wale 3 dots */
+.thinking-dot {
+  animation: thinking 1.4s ease-in-out infinite both;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes thinking {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+.fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Motion pasand nahi (OS setting) -> animations band, cursor static */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dot, .fade-in { animation: none; }
+  .md.is-streaming > :is(p, h1, h2, h3, h4, blockquote):last-child::after,
+  .md.is-streaming > :is(ul, ol):last-child > li:last-child::after { animation: none; }
+}

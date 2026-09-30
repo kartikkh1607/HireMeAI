@@ -11,3 +11,5 @@ wheels/
 .env
 data/resume_cache.json
 data/*.pdf
+# Frontend (React + Vite)
+frontend/node_modules

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse  # file / tukdon me jawab
+from fastapi.staticfiles import StaticFiles  # React build ki JS/CSS files serve karne ke liye
 from pydantic import BaseModel, Field
 
 from app.chat import build_system_prompt, stream_answer
@@ -143,3 +144,9 @@ def chat(request: ChatRequest):
 @app.get("/")
 def home():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+# React (Vite) build: static/index.html upar wala "/" deta hai, aur uski
+# JS/CSS files static/assets/ me hoti hain -> /assets/... URL pe serve.
+# check_dir=False -> frontend build na hua ho tab bhi server start ho jaaye.
+app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets", check_dir=False), name="assets")
