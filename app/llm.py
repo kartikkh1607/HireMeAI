@@ -38,6 +38,26 @@ T = TypeVar("T", bound=BaseModel)
 Effort = Literal["low", "medium", "high"]
 
 # -----------------------------------------------------------------------------
+# OUTPUT TOKEN LIMIT - PRODUCTION BUG SE AAYA (Render, 1 Oct 2026)
+#
+# Pehle ye set hi nahi tha -> Groq ki DEFAULT limit lagti thi.
+# gpt-oss REASONING model hai: JSON likhne se pehle "sochta" hai, aur sochne
+# ke tokens bhi isi limit me gine jaate hain (Week 1 Q3).
+# Naya resume lamba tha (4 projects) -> ek deploy pe model ne zyada socha ->
+# JSON "education" ke baad kat gaya -> Groq ne 400 "json_validate_failed"
+# diya -> server start hi nahi hua. SAME code ek baar pass, ek baar fail -
+# kyunki reasoning ki lambai har run me alag hoti hai (random bug).
+#
+# NOTE: strict mode me truncation pe finish_reason="length" nahi aata -
+# Groq seedha 400 error deta hai. Isliye neeche wala "length" check is case
+# me chalta hi nahi tha. Asli fix = limit itni rakho ki kabhi na kate.
+#
+# 8192 = reasoning (~1-3k) + resume ka poora JSON (~2k) + bahut margin.
+# Limit sirf UPPER cap hai - bill utna hi lagta hai jitne tokens bane.
+# -----------------------------------------------------------------------------
+MAX_COMPLETION_TOKENS = 8192
+
+# -----------------------------------------------------------------------------
 # RETRY POLICY - kaunse errors pe dobara try karna hai.
 # Rule: sirf TEMPORARY problems retry karo.
 #
@@ -49,7 +69,7 @@ Effort = Literal["low", "medium", "high"]
 #
 #  Retry MAT karo (har baar same error aayega, sirf time + quota waste):
 #   AuthenticationError (401) -> galat API key
-#   BadRequestError (400)     -> galat request / schema
+#   BadRequestError (400)     -> galat request / schema / token limit kam
 #   ValueError ("length")     -> neeche dekho
 #
 # Interview Q: "ValidationError bhi ValueError ki subclass hai, to length wala
@@ -111,6 +131,7 @@ def structured_call(
         },
         temperature=0,  # extraction hai, creativity nahi chahiye (Week 1 Q2)
         reasoning_effort=reasoning_effort,  # gpt-oss reasoning model hai - kitna "soche"
+        max_completion_tokens=MAX_COMPLETION_TOKENS,  # upar wala production bug dekho
     )
 
     choice = response.choices[0]
@@ -119,6 +140,8 @@ def structured_call(
     # "length" = max_tokens pe output kat gaya -> JSON adhoora hai.
     # Reasoning models sochne me bhi tokens khaate hain, isliye ye zyada hota hai.
     # Retry nahi karte - dobara bhi wahin katega. Isliye plain ValueError.
+    # (Strict mode me Groq aksar isse pehle hi 400 de deta hai - upar NOTE dekho.
+    #  Ye check non-strict / dusre providers ke liye backup hai.)
     if choice.finish_reason == "length":
         raise ValueError("Output max_tokens pe cut ho gaya - JSON incomplete hai")
 
@@ -128,4 +151,4 @@ def structured_call(
     # ValidationError -> jo upar RETRYABLE list me hai -> auto retry.
     # (Strict mode ke baad bhi ye check rakhte hain - defense in depth.
     #  Har model/provider strict mode 100% support nahi karta.)
-    return output_model.model_validate_json(choice.message.content) # type: ignore
+    return output_model.model_validate_json(choice.message.content)  # type: ignore

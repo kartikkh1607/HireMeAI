@@ -12,8 +12,10 @@ wheels/
 # Secrets
 .env
 
-# Generated data
-data/resume_cache.json
+# NOTE: data/resume_cache.json ab COMMIT hota hai (ignore nahi).
+# Production startup pe LLM call na lage - parsed resume seedha cache se.
+# Safe hai kyunki resume me phone nahi hai ("phone": null).
+# Resume badlo -> eval_resume.py chalao -> naya cache bhi commit karo.
 
 # Resume: saare PDFs ignore, sirf phone-free wala commit hoga
 data/*.pdf

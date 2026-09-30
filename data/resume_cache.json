@@ -1,0 +1,148 @@
+{
+  "cache_key": "f7d458320509bce439b7c909a0b130657285f84117b3fc99a28de8e5e54de21e",
+  "resume": {
+    "name": "Kartik Khandelwal",
+    "email": "kartikkhandelwal1234589@gmail.com",
+    "phone": null,
+    "location": "Ghaziabad, UP, 201206",
+    "summary": "Aspiring GenAI Engineer building LLM applications end to end with Python, FastAPI and Groq: structured outputs, streaming APIs, evaluation, security hardening and deployment. Built and deployed HireMeAI, a resume-grounded recruiter chatbot with a golden-set eval and 20 automated tests. Background in Android development (Kotlin, Jetpack Compose), 450+ DSA problems solved and 4 AWS certifications. Seeking a GenAI / Applied AI Engineer internship.",
+    "skills": [
+      "Python",
+      "C++",
+      "Kotlin",
+      "Java",
+      "LLM APIs (Groq)",
+      "Prompt Engineering",
+      "Structured Outputs (JSON Schema, Pydantic)",
+      "Streaming",
+      "LLM Evaluation",
+      "Prompt-Injection Defense",
+      "FastAPI",
+      "REST APIs",
+      "pytest",
+      "uv",
+      "AWS (Lambda, API Gateway, SQS, DynamoDB, EC2, VPC)",
+      "Terraform",
+      "Render",
+      "Git",
+      "GitHub",
+      "Jetpack Compose",
+      "MVVM",
+      "Clean Architecture",
+      "Hilt",
+      "Room",
+      "Retrofit",
+      "Coroutines",
+      "Kotlin Flow",
+      "Firebase Auth"
+    ],
+    "experiences": [],
+    "projects": [
+      {
+        "name": "HireMeAI",
+        "description": "AI Recruiter Chatbot",
+        "highlights": [
+          "Built a chatbot that answers recruiter questions only from my resume, with streamed responses; the resume is parsed once into a strict JSON schema and cached by a hash of file, prompt and model.",
+          "Wrote a golden-set eval that caught silent data loss from schema gaps and a brittle post-processing filter; added 20 pytest tests with the LLM mocked, so they run free in about a second.",
+          "Hardened it for public use: phone number withheld from the model, prompt-injection and XSS defenses, input caps, and per-IP plus global rate limiting after finding and fixing an X-Forwarded-For spoofing bypass."
+        ],
+        "tech_stack": [
+          "Python",
+          "FastAPI",
+          "Groq (gpt-oss-120b)",
+          "Pydantic",
+          "React",
+          "pytest",
+          "Render"
+        ],
+        "link": "https://github.com/kartikkh1607/HireMeAI"
+      },
+      {
+        "name": "MyRecipeApp",
+        "description": "Recipe Browser Android Application",
+        "highlights": [
+          "Integrated Spoonacular REST API using Retrofit with structured error handling and JSON parsing across multiple endpoints.",
+          "Designed features including recipe search, favorites, and an automated shopping list that aggregates ingredients from saved recipes."
+        ],
+        "tech_stack": [
+          "Kotlin",
+          "Jetpack Compose",
+          "Retrofit",
+          "REST API",
+          "Spoonacular API"
+        ],
+        "link": "https://github.com/kartikkh1607/MyrecipeApp"
+      },
+      {
+        "name": "Kometo",
+        "description": "Food Delivery Android Application",
+        "highlights": [
+          "Developed a Zomato-inspired Android application with 8+ screens using Jetpack Compose, implementing type-safe navigation and reusable UI components for scalability.",
+          "Integrated Firebase Authentication (Google Sign-In + Email) with persistent user sessions, ensuring reliable login experience across app restarts."
+        ],
+        "tech_stack": [
+          "Kotlin",
+          "Jetpack Compose",
+          "Clean Architecture",
+          "Hilt",
+          "Firebase Auth",
+          "Material Design 3"
+        ],
+        "link": "https://github.com/kartikkh1607/Kometo"
+      },
+      {
+        "name": "MyWishlist",
+        "description": "Offline Wishlist Manager",
+        "highlights": [
+          "Built a fully offline Android application using Room Database, supporting filtering, tagging, and search without network dependency.",
+          "Implemented reactive UI using Kotlin Flow and StateFlow to deliver real-time updates without manual refresh."
+        ],
+        "tech_stack": [
+          "Kotlin",
+          "Jetpack Compose",
+          "Room Database",
+          "MVVM",
+          "Kotlin Flow"
+        ],
+        "link": "https://github.com/kartikkh1607/MyWishListApp"
+      }
+    ],
+    "education": [
+      {
+        "institution": "KIET Group of Institutions",
+        "degree": "B.Tech in Information Technology",
+        "duration": "2024 – 2028",
+        "score": "CGPA: 8.17",
+        "coursework": [
+          "Data Structures",
+          "Algorithms",
+          "OOP",
+          "Operating Systems",
+          "DBMS"
+        ]
+      }
+    ],
+    "certifications": [
+      "AWS Certified CloudOps Engineer – Associate (April 2026)",
+      "AWS Certified Data Engineer – Associate (April 2026)",
+      "AWS Certified AI Practitioner — Amazon Web Services (December 2025)",
+      "AWS Certified Cloud Practitioner — Amazon Web Services (December 2025)",
+      "Model United Nations (MUN) Participant — KIET Group of Institutions"
+    ],
+    "achievements": [
+      "Solved 450+ DSA problems on LeetCode, maintaining a 100+ day coding streak.",
+      "National-level participant in Bharatiya Antariksh Hackathon 2025 organised by ISRO & Hack2Skill."
+    ],
+    "links": [
+      "https://www.linkedin.com/in/kartik-khandelwal-a71554327",
+      "https://github.com/kartikkh1607",
+      "https://leetcode.com/u/Kartik_Khandelwal_2004/",
+      "https://my-portfolio-azure-nine-26.vercel.app/",
+      "https://hiremeai-kartik.onrender.com",
+      "https://github.com/kartikkh1607/HireMeAI",
+      "https://github.com/kartikkh1607/MyrecipeApp",
+      "https://github.com/kartikkh1607/Kometo",
+      "https://github.com/kartikkh1607/MyWishListApp"
+    ]
+  }
+}
