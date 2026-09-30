@@ -8,8 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secrets
 .env
+
+# Generated data
 data/resume_cache.json
+
+# Resume: saare PDFs ignore, sirf phone-free wala commit hoga
 data/*.pdf
+!data/my_resume.pdf
+
 # Frontend (React + Vite)
 frontend/node_modules
