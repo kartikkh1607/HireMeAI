@@ -1,0 +1,325 @@
+<!doctype html>
+<!--
+  static/index.html
+  Kaam: recruiter ke liye chat page. Koi framework nahi (React wagairah) -
+  sirf HTML + CSS + plain JavaScript, taaki har line samajh aaye.
+
+  Flow:
+    1. Page khulte hi /profile se naam + links lao, header me dikhao
+    2. Recruiter sawaal likhe -> POST /chat (sawaal + history)
+    3. Jawab tukdon me aaye -> har tukde pe bubble update karo (typing effect)
+    4. Jawab poora hone pe history me save karo (agle sawaal ke liye)
+
+  History BROWSER me rehti hai (JS variable), server pe nahi.
+  Isliye server stateless hai. Page refresh = nayi conversation.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HireMeAI</title>
+  <style>
+    /* ---- Colors ek jagah (CSS variables). Dark mode me sirf ye badalte hain ---- */
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1d1f23;
+      --muted: #6b7280;
+      --border: #e3e5e8;
+      --accent: #2f6fed;
+      --accent-text: #ffffff;
+      --bot-bubble: #f1f3f6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111317;
+        --card: #1a1d22;
+        --text: #e8eaed;
+        --muted: #9aa0a6;
+        --border: #2c3037;
+        --accent: #5b8cff;
+        --accent-text: #0b1020;
+        --bot-bubble: #23272e;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* Poora app ek column me, beech me, max 760px chauda */
+    .app {
+      max-width: 760px;
+      margin: 0 auto;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+    }
+    header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+    .links { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 12px; font-size: 14px; }
+    a { color: var(--accent); }
+
+    /* Messages wala area - bacha hua saara space le, aur scroll ho */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      overflow-wrap: anywhere; /* lambe URLs bubble ke bahar na jaayen */
+    }
+    .user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
+    .user a { color: inherit; }
+    .bot { align-self: flex-start; background: var(--bot-bubble); }
+
+    /* Suggested questions (chips) */
+    #suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .chip:hover { border-color: var(--accent); }
+
+    form { display: flex; gap: 8px; }
+    input {
+      flex: 1;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 15px;
+    }
+    button[type="submit"] {
+      padding: 0 18px;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: var(--accent-text);
+      font-size: 15px;
+      cursor: pointer;
+    }
+    button:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
+    .note { color: var(--muted); font-size: 12px; text-align: center; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1 id="name">HireMeAI</h1>
+      <p>Ask anything about this candidate. Answers come only from the resume.</p>
+      <div class="links" id="links"></div>
+    </header>
+
+    <div id="messages"></div>
+
+    <div id="suggestions">
+      <button class="chip">What projects has he built?</button>
+      <button class="chip">What are his main skills?</button>
+      <button class="chip">Any hackathons or achievements?</button>
+      <button class="chip">Which certifications does he have?</button>
+    </div>
+
+    <form id="chat-form">
+      <input id="question" placeholder="Ask a question..." maxlength="1000" autocomplete="off" />
+      <button type="submit" id="send">Send</button>
+    </form>
+    <p class="note">AI assistant - it can make mistakes. Verify important details with the candidate.</p>
+  </div>
+
+  <script>
+    // ---- Page ke elements pakdo ----
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("question");
+    const sendBtn = document.getElementById("send");
+    const suggestionsEl = document.getElementById("suggestions");
+
+    // Conversation history - BROWSER me rehti hai. Har request ke saath bhejte hain.
+    // Server ko kuch yaad nahi rakhna padta (stateless).
+    const history = [];
+
+    // Server (main.py) bhi 20 se zyada reject karta hai; hum aakhri 10 hi bhejte hain
+    const MAX_HISTORY = 10;
+
+    // -------------------------------------------------------------------------
+    // SECURITY: escapeHtml
+    // LLM ka jawab seedha innerHTML me daala to khatra: agar prompt injection se
+    // model "<img src=x onerror=alert(1)>" likh de, to wo recruiter ke browser
+    // me CHAL jayega (XSS attack). Isliye PEHLE saare < > & " ' ko safe
+    // text me badlo, PHIR sirf apne control wale tags (strong, a, br) banao.
+    // -------------------------------------------------------------------------
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+
+    // Chhota markdown renderer - sirf wahi jo model use karta hai:
+    // **bold**, [text](url), bare URLs, new lines
+    function render(markdown) {
+      let html = escapeHtml(markdown);
+      html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      // [text](url) - sirf http/https links (javascript: wale nahi!)
+      html = html.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>'
+      );
+      // Bina markdown wale seedhe URLs (jo pehle se <a> ke andar nahi hain)
+      html = html.replace(
+        /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+        '$1<a href="$2" target="_blank" rel="noopener">$2</a>'
+      );
+      html = html.replace(/\n/g, "<br>");
+      return html;
+    }
+
+    // Naya message bubble banao aur neeche scroll karo
+    function addMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + (role === "user" ? "user" : "bot");
+      div.innerHTML = render(text);
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    // Jawab aate waqt input band rakho - taaki do sawaal ek saath na chalein
+    function setBusy(busy) {
+      input.disabled = busy;
+      sendBtn.disabled = busy;
+      document.querySelectorAll(".chip").forEach((c) => (c.disabled = busy));
+      if (!busy) input.focus();
+    }
+
+    // -------------------------------------------------------------------------
+    // Asli kaam: sawaal bhejo, jawab STREAM me padho
+    // -------------------------------------------------------------------------
+    async function ask(question) {
+      // Pehla sawaal poochte hi suggestion chips chhupa do (mobile pe jagah bachti hai)
+      suggestionsEl.hidden = true;
+      addMessage("user", question);
+      const botBubble = addMessage("bot", "...");
+      setBusy(true);
+
+      let answer = "";
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: question,
+            history: history.slice(-MAX_HISTORY), // sliding window
+          }),
+        });
+
+        // 422 = validation fail (jaise sawaal 1000 characters se lamba)
+        if (!response.ok) {
+          botBubble.innerHTML = render("Sorry, that request could not be processed (" + response.status + ").");
+          return;
+        }
+
+        // ---- STREAMING READ ----
+        // response.body ek stream hai. getReader() se tukde ek-ek karke padho.
+        // TextDecoder bytes ko text me badalta hai. {stream: true} zaroori hai -
+        // warna Hindi/emoji jaisa character do tukdon me toot ke kharab dikhega.
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          answer += decoder.decode(value, { stream: true });
+          botBubble.innerHTML = render(answer); // har tukde pe bubble update
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Jawab poora hua -> dono messages history me daalo (agle sawaal ke liye)
+        history.push({ role: "user", content: question });
+        history.push({ role: "assistant", content: answer });
+      } catch (err) {
+        // Network band / server down
+        botBubble.innerHTML = render("Could not reach the server. Please try again.");
+      } finally {
+        setBusy(false); // success ho ya error, input wapas chalu karo
+      }
+    }
+
+    // Form submit (Enter ya Send button)
+    form.addEventListener("submit", (event) => {
+      event.preventDefault(); // browser ka default "page reload" roko
+      const question = input.value.trim();
+      if (!question) return;
+      input.value = "";
+      ask(question);
+    });
+
+    // Suggested question pe click = wahi sawaal pooch lo
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => ask(chip.textContent));
+    });
+
+    // -------------------------------------------------------------------------
+    // Page khulte hi: /profile se naam aur links lao
+    // -------------------------------------------------------------------------
+    async function loadProfile() {
+      try {
+        const profile = await (await fetch("/profile")).json();
+        if (profile.name) {
+          document.getElementById("name").textContent = "HireMeAI - " + profile.name;
+          document.title = "HireMeAI - " + profile.name;
+        }
+        const linksEl = document.getElementById("links");
+        // Sirf profile-level links (repo links nahi - wo projects me aate hain)
+        const labels = { "linkedin.com": "LinkedIn", "leetcode.com": "LeetCode", "vercel.app": "Portfolio" };
+        for (const url of profile.links || []) {
+          let label = null;
+          for (const key in labels) if (url.includes(key)) label = labels[key];
+          if (!label && /^https:\/\/github\.com\/[^/]+\/?$/.test(url)) label = "GitHub";
+          if (!label) continue;
+          const a = document.createElement("a");
+          a.href = url;
+          a.textContent = label; // textContent = safe (HTML nahi banta)
+          a.target = "_blank";
+          a.rel = "noopener";
+          linksEl.appendChild(a);
+        }
+      } catch (err) {
+        // Profile na mile to bhi chat chalna chahiye - chup-chaap ignore
+      }
+      addMessage("bot", "Hi! I can answer questions about this candidate's projects, skills, education and achievements.");
+    }
+
+    loadProfile();
+  </script>
+</body>
+</html>
