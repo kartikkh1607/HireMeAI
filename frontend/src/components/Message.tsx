@@ -6,6 +6,9 @@ import { Markdown } from './Markdown'
 
 const ERROR_TEXT: Record<ChatErrorKind, string> = {
   validation: 'That question could not be processed.',
+  rate_limit: "You're asking questions too quickly. Please wait a moment and try again.",
+  unavailable: 'The AI service is temporarily unavailable. Please try again in a moment.',
+  interrupted: 'The answer was interrupted.',
   network: 'Could not reach the server.',
   server: 'The server ran into a problem.',
 }
@@ -22,7 +25,7 @@ export const Message = memo(function Message({ message, avatarLabel, onRetry }: 
   if (message.role === 'user') {
     return (
       <div className="fade-in flex justify-end">
-        <div className="max-w-[85%] rounded-3xl bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap sm:max-w-[75%]">
+        <div className="max-w-[85%] rounded-3xl bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap sm:max-w-[75%]">
           {message.content}
         </div>
       </div>
@@ -56,7 +59,8 @@ export const Message = memo(function Message({ message, avatarLabel, onRetry }: 
             className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-danger/25 bg-danger-soft px-3.5 py-2.5 text-sm"
           >
             <TriangleAlert size={16} aria-hidden="true" className="shrink-0 text-danger" />
-            <span className="flex-1">{ERROR_TEXT[error]}</span>
+            {/* Server ka message (429: minute vs daily limit) ho to wahi - plain text, safe */}
+            <span className="flex-1">{message.errorDetail ?? ERROR_TEXT[error]}</span>
             <button
               type="button"
               onClick={() => onRetry(message.id)}

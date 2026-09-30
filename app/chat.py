@@ -20,6 +20,15 @@ from app.schemas import ChatMessage, Resume
 # History badhti gayi to tokens, cost aur latency teeno badhte jaayenge.
 MAX_HISTORY = 10
 
+# Ek jawab me max kitne tokens bane (cost cap).
+# DHYAAN: gpt-oss REASONING model hai - andar "sochne" wale tokens bhi isi limit
+# me gine jaate hain. Isse kam kiya to lambe sawaalon pe jawab shuru hone se
+# pehle hi tokens khatam ho sakte hain. 1500 se neeche mat jaana.
+MAX_COMPLETION_TOKENS = 1500
+
+# Limit pe jawab kata to user ko saaf batao (markdown italic me)
+TRUNCATED_NOTE = "\n\n*(answer truncated)*"
+
 
 # -----------------------------------------------------------------------------
 # System prompt TEMPLATE - {name}, {email}, {resume_json} baad me bharte hain.
@@ -130,16 +139,27 @@ def stream_answer(
         temperature=0.3,  # parsing me 0 tha (exactness). Chat me thoda natural
         # language chahiye, par itni creativity nahi ki facts badal jaayen.
         reasoning_effort="low",  # chat me speed > deep thinking (test me ~3x fast tha)
+        max_completion_tokens=MAX_COMPLETION_TOKENS,
     )
 
+    finish_reason = None
     for chunk in stream:
         # Stream ke end me kabhi sirf usage-info wala chunk aata hai jisme
         # choices khali hota hai -> [0] pe crash na ho isliye skip
         if not chunk.choices:
             continue
 
+        choice = chunk.choices[0]
+        # finish_reason sirf AAKHRI chunk me aata hai ("stop" / "length")
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+
         # Streaming me text "delta" me aata hai, "message" me nahi.
         # Kuch chunks me content None hota hai (role info wagairah) -> skip
-        piece = chunk.choices[0].delta.content
+        piece = choice.delta.content
         if piece:
             yield piece
+
+    # "length" = MAX_COMPLETION_TOKENS pe jawab kat gaya
+    if finish_reason == "length":
+        yield TRUNCATED_NOTE

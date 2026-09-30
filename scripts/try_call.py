@@ -1,3 +1,6 @@
+# Manual script - asli Groq call karta hai (pytest test NAHI hai).
+# Chalao (project root se): uv run python -m scripts.try_call
+
 from app.config import client, MODEL
 
 message = {"role": "user", "content": "Say hi in exactly 5 words"}

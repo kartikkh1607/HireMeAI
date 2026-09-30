@@ -14,11 +14,12 @@ Recruiters can ask things like *"What has he built?"*, *"Has he done any hackath
 ## Features
 
 - **Resume → structured data** with strict JSON-schema output (Pydantic + Groq structured outputs)
-- **Parse once, cache forever** — the resume is parsed at startup and cached; the cache invalidates automatically when the file, prompt, model or parser code changes
+- **Parse once, cache forever** — the resume is parsed at startup and cached; the cache invalidates automatically when the file, prompt or model changes (parser code changes need a manual `PARSER_VERSION` bump in `app/resume.py`)
 - **Streaming chat** with multi-turn memory (sliding window of the last 10 messages)
 - **Grounded answers** — no invented skills, no exaggerated skill levels, honest "not in the resume" replies
 - **Privacy by design** — the phone number is parsed but never sent to the chat model
 - **Prompt-injection & XSS defenses** on both the backend and frontend
+- **Abuse limits** — per-IP rate limiting, history size caps and a per-answer token cap (see [Security & limits](#security--limits))
 - **Golden-set eval** for the resume parser (`eval_resume.py`)
 - ChatGPT-style **React + Vite** UI served by FastAPI
 
@@ -51,6 +52,8 @@ The expensive work (parsing) happens once; each question is a single cheap chat 
 | `app/chat.py` | System prompt + streaming answers |
 | `app/main.py` | FastAPI: startup, validation, endpoints |
 | `frontend/` | React + TypeScript + Tailwind chat UI (built into `static/`) |
+| `tests/` | pytest suite (FastAPI `TestClient`, Groq mocked) |
+| `scripts/` | Manual `try_*.py` experiments that call Groq |
 
 ## Engineering decisions (and the bugs that led to them)
 
@@ -82,7 +85,7 @@ The chat was red-teamed manually: follow-up questions, missing skills (Kubernete
 
 ## Run locally
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 20+ (only to rebuild the UI), a free [Groq API key](https://console.groq.com).
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 20.19+ (only to rebuild the UI), a free [Groq API key](https://console.groq.com).
 
 ```bash
 git clone https://github.com/kartikkh1607/HireMeAI.git
@@ -113,9 +116,39 @@ npm run build      # outputs to ../static, served by FastAPI
 Useful scripts:
 
 ```bash
-uv run python eval_resume.py   # parser golden-set eval
-uv run python test_chat.py     # chat in the terminal
+uv run pytest                        # API tests - no Groq calls, runs in ~1s
+uv run python eval_resume.py         # parser golden-set eval (uses the cached parse)
+uv run python -m scripts.try_chat    # chat in the terminal (real Groq calls)
 ```
+
+`scripts/try_*.py` are manual experiments that call Groq for real; run them from the project root with `python -m` so `app` is importable. They are not part of the test suite.
+
+Production notes:
+
+```bash
+# ENV=production turns off /docs, /redoc and /openapi.json
+# --proxy-headers makes the rate limiter see the real client IP behind a proxy (e.g. Render)
+ENV=production uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+```
+
+## Security & limits
+
+| Protection | How |
+|---|---|
+| Rate limit | `POST /chat`: 10 requests/minute and 100/day per IP → `429` with a JSON `detail` and `Retry-After` header |
+| Request size | Question 1–1000 chars; history max 20 messages, each max 4000 chars (the UI sends only the last 10) |
+| Token cap | `max_completion_tokens=1500` per answer (includes the reasoning tokens of `gpt-oss`); truncated answers end with *(answer truncated)* |
+| Privacy | The phone number is parsed but never sent to the chat model or returned by `/profile` |
+| Role injection | History roles are limited to `user` / `assistant` — a `system` message is rejected with `422` |
+| Prompt injection | Resume and questions are treated as data, not instructions (system prompt rules) |
+| XSS | The UI renders answers with `react-markdown` (no raw HTML), allows only `http(s)` links and never loads images |
+| Errors | Upstream failures before the first token return `503`; mid-stream failures end with a sentinel the UI turns into an error with Retry |
+| API docs | Disabled when `ENV=production` |
+
+**Known limitations**
+
+- The rate limiter is in-memory and per process: counts reset on restart and are not shared across multiple instances or workers (fine for a single instance; use Redis to scale out). Behind a proxy, uvicorn must run with `--proxy-headers --forwarded-allow-ips="*"`, otherwise every visitor shares the proxy's IP.
+- The server is stateless, so it trusts the history the browser sends. A client can fabricate earlier "assistant" turns — but that only affects their own conversation, never other users. Low risk by design.
 
 ## API
 
@@ -123,7 +156,7 @@ uv run python test_chat.py     # chat in the terminal
 |---|---|---|
 | `GET` | `/health` | Liveness check |
 | `GET` | `/profile` | Parsed resume (phone removed) |
-| `POST` | `/chat` | `{ "question": str, "history": [{role, content}] }` → streamed `text/plain` |
+| `POST` | `/chat` | `{ "question": str, "history": [{role, content}] }` → streamed `text/plain` (`422` invalid input, `429` rate limited, `503` AI service unavailable) |
 
 ## Roadmap
 

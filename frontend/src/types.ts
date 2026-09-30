@@ -27,7 +27,10 @@ export interface ChatTurn {
   content: string
 }
 
-export type ChatErrorKind = 'validation' | 'network' | 'server'
+// validation = 422, rate_limit = 429, unavailable = 503 (Groq down / quota),
+// interrupted = jawab beech me toota (server ne sentinel bheja),
+// network = server tak pahunche hi nahi, server = koi aur 4xx/5xx
+export type ChatErrorKind = 'validation' | 'rate_limit' | 'unavailable' | 'interrupted' | 'network' | 'server'
 
 // UI ka message - ChatTurn + display ki extra info (status, error)
 export interface UIMessage {
@@ -38,4 +41,6 @@ export interface UIMessage {
   // error = request fail hui (content me partial jawab ho sakta hai)
   status: 'streaming' | 'done' | 'stopped' | 'error'
   error?: ChatErrorKind
+  // Server ka apna message (jaise 429 me "10 per minute" vs "daily limit")
+  errorDetail?: string
 }

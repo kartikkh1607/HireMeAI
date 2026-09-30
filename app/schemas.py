@@ -12,7 +12,7 @@
 
 from typing import Literal  # "sirf ye fixed values allowed hain" batane ke liye
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # -----------------------------------------------------------------------------
@@ -97,7 +97,10 @@ class Resume(StrictModel):
 # Agar koi browser/API se history me {"role": "system", ...} bheje (apne rules
 # inject karne ke liye), Pydantic reject kar dega -> FastAPI 422 error.
 # Ek bhi "if" likhe bina security check ho gaya - Literal ka kamaal.
+#
+# ABUSE LIMIT: content max 4000 characters. Pehle sirf question (1000) limited
+# tha - koi history me 20 x 2MB text bhej ke tumhare Groq tokens jala sakta tha.
 # -----------------------------------------------------------------------------
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = Field(max_length=4000)

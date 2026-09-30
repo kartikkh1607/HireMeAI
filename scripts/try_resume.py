@@ -1,3 +1,6 @@
+# Manual script - asli Groq call karta hai (pytest test NAHI hai).
+# Chalao (project root se): uv run python -m scripts.try_resume
+
 import time
 
 from app.resume import load_resume

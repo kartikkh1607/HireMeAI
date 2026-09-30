@@ -1,3 +1,6 @@
+# Manual script - asli Groq call karta hai (pytest test NAHI hai).
+# Chalao (project root se): uv run python -m scripts.try_llm
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict

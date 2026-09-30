@@ -6,7 +6,7 @@
 // har /chat request ke saath hum khud pichhli baatein bhejte hain.
 // Page refresh ya "New chat" = nayi conversation.
 // =============================================================================
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChatError, getProfile, streamChat } from './api'
 import { Composer } from './components/Composer'
 import { EmptyState } from './components/EmptyState'
@@ -47,9 +47,13 @@ export default function App() {
   // Chal rahi request ka AbortController. Ref me kyunki ye UI nahi badalta,
   // bas Stop / New chat ko isse abort() karna hota hai.
   const abortRef = useRef<AbortController | null>(null)
-  // Latest messages ref me bhi - taaki async callbacks purana (stale) data na padhein
+  // Latest messages ref me bhi - taaki async callbacks purana (stale) data na padhein.
+  // Ref ko RENDER ke dauraan nahi badalte (React rule) - commit ke baad effect me.
+  // useLayoutEffect -> paint se pehle update, taaki agla click hamesha naya data dekhe.
   const messagesRef = useRef(messages)
-  messagesRef.current = messages
+  useLayoutEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -94,8 +98,11 @@ export default function App() {
         if (controller.signal.aborted) {
           patch(assistantId, (m) => ({ ...m, status: 'stopped' }))
         } else {
+          // Error wala jawab buildHistory() me skip hota hai -> agle sawaal ke
+          // context me adhoora / toota jawab nahi jaata
           const kind = err instanceof ChatError ? err.kind : 'network'
-          patch(assistantId, (m) => ({ ...m, status: 'error', error: kind }))
+          const errorDetail = err instanceof ChatError ? err.detail : undefined
+          patch(assistantId, (m) => ({ ...m, status: 'error', error: kind, errorDetail }))
         }
       } finally {
         // Sirf apna hi controller saaf karo (New chat ke baad naya chal raha ho sakta hai)
@@ -132,7 +139,7 @@ export default function App() {
       const question = all[index - 1]
       if (index < 1 || question.role !== 'user') return
       const history = buildHistory(all.slice(0, index - 1))
-      patch(assistantId, (m) => ({ ...m, content: '', status: 'streaming', error: undefined }))
+      patch(assistantId, (m) => ({ ...m, content: '', status: 'streaming', error: undefined, errorDetail: undefined }))
       void runAnswer(assistantId, question.content, history)
     },
     [patch, runAnswer],

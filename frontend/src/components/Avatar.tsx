@@ -9,7 +9,7 @@ export function Avatar({ label, size = 'sm' }: AvatarProps) {
   return (
     <div
       aria-hidden="true"
-      className={`${sizing} grid shrink-0 place-items-center rounded-full border border-border bg-gradient-to-br from-accent-soft to-surface-2 font-semibold tracking-wide text-fg select-none`}
+      className={`${sizing} grid shrink-0 place-items-center rounded-full border border-border bg-linear-to-br from-accent-soft to-surface-2 font-semibold tracking-wide text-fg select-none`}
     >
       {label}
     </div>

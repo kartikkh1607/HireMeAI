@@ -14,12 +14,17 @@
 # =============================================================================
 
 import logging  # server ke terminal me errors/info print karne ke liye
-from collections.abc import Iterator
+import math
+import os
+import threading
+import time
+from collections import deque
+from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager  # lifespan function banane ke liye
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, StreamingResponse  # file / tukdon me jawab
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # file / JSON / tukdon me jawab
 from fastapi.staticfiles import StaticFiles  # React build ki JS/CSS files serve karne ke liye
 from pydantic import BaseModel, Field
 
@@ -36,6 +41,20 @@ logger = logging.getLogger("hiremeai")
 
 # Frontend (index.html) ka folder - resume.py jaisa hi absolute path trick
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# ENV=production (deploy pe set karo) -> /docs, /redoc, /openapi.json band.
+# Local pe ye pages kaam ke hain, par public server pe poora API map
+# sabko dikhane ki zaroorat nahi. (.env app.config import hote hi load ho chuki hai)
+IS_PRODUCTION = os.getenv("ENV", "").strip().lower() == "production"
+
+# -----------------------------------------------------------------------------
+# STREAM ERROR SENTINEL - jawab ke BEECH me Groq fail ho to ye fixed string
+# stream ke end me bhejte hain. Status 200 pehle hi ja chuka hota hai, isliye
+# error batane ka yahi tareeka bachta hai. Frontend (frontend/src/api.ts) is
+# EXACT string ko pehchaan ke hata deta hai aur Retry dikhata hai.
+# Badlo to dono jagah badlo!
+# -----------------------------------------------------------------------------
+STREAM_ERROR_SENTINEL = "\n\n[[HIREMEAI_STREAM_ERROR]]"
 
 
 # -----------------------------------------------------------------------------
@@ -63,8 +82,103 @@ async def lifespan(app: FastAPI):
     yield  # <- yahan server requests lena shuru karta hai
 
 
-# title /docs page pe dikhta hai
-app = FastAPI(title="HireMeAI", lifespan=lifespan)
+# title /docs page pe dikhta hai. None = wo page band (production me)
+app = FastAPI(
+    title="HireMeAI",
+    lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
+
+
+# -----------------------------------------------------------------------------
+# RATE LIMITER - ek IP kitne sawaal pooch sakti hai (Groq quota bachane ke liye).
+# Koi nayi library nahi - bas har IP ke request times ki list (deque).
+#
+# SLIDING WINDOW: "pichhle 60 second me kitni requests?" - har baar ginte hain.
+# (Fixed window "12:00-12:01" me 12:00:59 + 12:01:00 pe double requests nikal
+#  jaati hain; sliding me nahi.)
+#
+# LIMITATIONS (jaan-boojh ke simple rakha):
+#   - Data sirf is PROCESS ki memory me hai. Server restart = counts reset.
+#     2+ workers/instances chalaoge to har ek ki alag ginti hogi. Ek instance
+#     ke liye theek hai; scale karna ho to Redis jaisa shared store chahiye.
+#   - Proxy ke peeche (Render, Nginx) request.client.host = PROXY ka IP hota
+#     hai, user ka nahi -> sab users ek hi limit share karenge! Isliye deploy
+#     pe uvicorn aise chalao:
+#       uvicorn app.main:app --proxy-headers --forwarded-allow-ips="*"
+#     Tab uvicorn X-Forwarded-For header se asli IP nikaalta hai.
+#
+# threading.Lock kyun? "def" endpoints alag-alag threads me chalte hain -
+# do requests ek saath deque badlein to count galat ho sakta hai.
+# -----------------------------------------------------------------------------
+MINUTE = 60.0
+DAY = 24 * 60 * 60.0
+
+
+class RateLimiter:
+    def __init__(self, per_minute: int, per_day: int, clock: Callable[[], float] = time.monotonic):
+        self.per_minute = per_minute
+        self.per_day = per_day
+        self.clock = clock  # tests me nakli ghadi de sakte hain
+        self._hits: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+        self._last_prune = clock()
+
+    def hit(self, key: str) -> tuple[str, float] | None:
+        """Allowed -> None (aur request gin li). Blocked -> (message, retry_after_seconds)."""
+        now = self.clock()
+        with self._lock:
+            self._prune(now)
+            hits = self._hits.setdefault(key, deque())
+            # 24 ghante se purane timestamps hatao (deque ke left = sabse purane)
+            while hits and hits[0] <= now - DAY:
+                hits.popleft()
+
+            if len(hits) >= self.per_day:
+                return (
+                    f"Daily limit reached ({self.per_day} questions per day). Please try again tomorrow.",
+                    hits[0] + DAY - now,
+                )
+
+            recent = [t for t in hits if t > now - MINUTE]
+            if len(recent) >= self.per_minute:
+                return (
+                    f"Too many questions ({self.per_minute} per minute). Please wait a moment and try again.",
+                    recent[0] + MINUTE - now,
+                )
+
+            hits.append(now)  # sirf ALLOWED requests gini jaati hain
+            return None
+
+    def _prune(self, now: float) -> None:
+        # Ghante me ek baar: jo IPs 24h se nahi aayin unhe memory se hatao,
+        # warna har naya visitor hamesha ke liye dict me pada rahega
+        if now - self._last_prune < 3600:
+            return
+        self._last_prune = now
+        stale = [ip for ip, hits in self._hits.items() if not hits or hits[-1] <= now - DAY]
+        for ip in stale:
+            del self._hits[ip]
+
+
+chat_limiter = RateLimiter(per_minute=10, per_day=100)
+
+
+# FastAPI DEPENDENCY - /chat ke function se PEHLE chalti hai.
+# HTTPException raise ki -> endpoint chalta hi nahi, seedha 429 JSON jaata hai:
+#   {"detail": "Too many questions ..."}  + Retry-After header (seconds)
+def enforce_rate_limit(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    blocked = chat_limiter.hit(ip)
+    if blocked:
+        message, retry_after = blocked
+        raise HTTPException(
+            status_code=429,
+            detail=message,
+            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -75,6 +189,7 @@ app = FastAPI(title="HireMeAI", lifespan=lifespan)
 # Ye limits API ke ABUSE se bachati hain (tumhare Groq tokens = tumhara quota):
 #   question: 1-1000 characters -> khali sawaal ya 50 page ka text nahi
 #   history: max 20 messages     -> koi 10,000 messages bhej ke tokens na jalaye
+#   ChatMessage.content: max 4000 -> ek message me 2MB text nahi (schemas.py)
 #   ChatMessage ka role Literal  -> "system" role inject karo to 422
 # -----------------------------------------------------------------------------
 class ChatRequest(BaseModel):
@@ -88,21 +203,26 @@ class ChatRequest(BaseModel):
 # SAFE STREAM - stream ke BEECH me error aaye to kya karein?
 #
 # Streaming me HTTP status (200 OK) PEHLE hi chala jaata hai, jawab baad me.
-# Groq beech me fail hua to ab 500 error bhejne ka time nikal chuka hai.
-# Isliye error ko stream ke andar pakad ke ek saaf message bhej dete hain.
+# Groq beech me fail hua to ab 503 bhejne ka time nikal chuka hai.
+# Isliye error pakad ke STREAM_ERROR_SENTINEL bhejte hain - frontend use
+# pehchaan ke error + Retry dikhata hai (aur us adhure jawab ko history me
+# nahi daalta).
 #
 # "except Exception" (sab kuch pakadna) aam taur pe bura hai, par API BOUNDARY
 # pe sahi hai - user ko crash/traceback nahi dikhna chahiye.
-# logger.exception() -> poora traceback TUMHARE terminal me (debug ke liye),
-# user ko sirf friendly message.
+# logger.exception() -> poora traceback TUMHARE terminal me (debug ke liye).
+# (User Stop dabaye to GeneratorExit aata hai - wo Exception NAHI hai,
+#  isliye yahan pakda nahi jaata. Sahi hai - wo error nahi hai.)
 # -----------------------------------------------------------------------------
-def safe_stream(question: str, history: list[ChatMessage]) -> Iterator[str]:
+def safe_stream(first: str, rest: Iterator[str]) -> Iterator[str]:
+    if first:
+        yield first  # pehla tukda chat() me pehle hi nikaal liya tha
     try:
         # "yield from" = dusre generator ke saare tukde aage pass karo
-        yield from stream_answer(app.state.system_prompt, history, question)
+        yield from rest
     except Exception:
-        logger.exception("Chat stream failed")
-        yield "\n\n[Sorry, something went wrong. Please try again.]"
+        logger.exception("Chat stream failed mid-way")
+        yield STREAM_ERROR_SENTINEL
 
 
 # -----------------------------------------------------------------------------
@@ -129,11 +249,31 @@ def profile():
 
 
 # Asli chat endpoint. POST kyunki data (sawaal + history) body me bhej rahe hain.
-@app.post("/chat")
+# dependencies=[...] -> rate limit check endpoint se PEHLE (limit par -> 429)
+@app.post("/chat", dependencies=[Depends(enforce_rate_limit)])
 def chat(request: ChatRequest):
+    stream = stream_answer(app.state.system_prompt, request.history, request.question)
+
+    # -------------------------------------------------------------------------
+    # GENERATOR "PRIME" KARNA - pehla tukda yahin nikaal lo.
+    # Generator banane se code chalta NAHI; next() pe pehli baar chalta hai.
+    # Zyadatar errors (rate limit, galat key, Groq down) PEHLE token se pehle
+    # aate hain. Agar yahin next() karein to status abhi bheja nahi gaya ->
+    # asli 503 error de sakte hain (text me chhupa "sorry" nahi).
+    # next(stream, "") -> jawab bilkul khaali ho to StopIteration ki jagah "".
+    # -------------------------------------------------------------------------
+    try:
+        first = next(stream, "")
+    except Exception:
+        logger.exception("Chat failed before first chunk")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "The AI service is temporarily unavailable. Please try again in a moment."},
+        )
+
     # StreamingResponse generator ke har "yield" ko turant browser ko bhej deta hai
     return StreamingResponse(
-        safe_stream(request.question, request.history),
+        safe_stream(first, stream),
         media_type="text/plain; charset=utf-8",  # plain text tukde, UTF-8 me
     )
 

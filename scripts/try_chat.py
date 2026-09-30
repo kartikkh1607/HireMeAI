@@ -1,3 +1,6 @@
+# Manual script - asli Groq call karta hai (pytest test NAHI hai).
+# Chalao (project root se): uv run python -m scripts.try_chat
+
 from app.chat import build_system_prompt, stream_answer
 from app.resume import load_resume
 from app.schemas import ChatMessage

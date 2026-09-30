@@ -1,6 +1,6 @@
 # Server ko sawaal bhejo aur jawab tukdon me print karo.
 # Pehle server chalao (ek terminal): uv run uvicorn app.main:app --reload
-# Phir ye (dusra terminal):          uv run python test_api.py
+# Phir ye (dusra terminal, project root se): uv run python -m scripts.try_api
 import httpx  # HTTP client - groq ke saath pehle hi install ho chuka hai
 
 payload = {
